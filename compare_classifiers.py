@@ -16,6 +16,7 @@ import pandas as pd
 import seaborn as sns
 from sklearn.datasets import load_iris
 from sklearn.metrics import (
+    ConfusionMatrixDisplay,
     accuracy_score,
     balanced_accuracy_score,
     f1_score,
@@ -23,7 +24,7 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import StratifiedKFold, cross_val_score, train_test_split
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.utils import all_estimators
 from tabulate import tabulate
@@ -31,11 +32,13 @@ from tabulate import tabulate
 RANDOM_STATE = 42
 TEST_SIZE = 0.2
 TOP_N = 20
+CV_SPLITS = 5
 
 OUTPUT_DIR = Path(__file__).resolve().parent
 RESULTS_CSV = OUTPUT_DIR / "classifiers_comparison.csv"
 SKIPPED_LOG = OUTPUT_DIR / "skipped_classifiers.log"
 RANKING_PNG = OUTPUT_DIR / "classifiers_ranking.png"
+CONFUSION_PNG = OUTPUT_DIR / "best_model_confusion_matrix.png"
 
 RESULT_COLUMNS = [
     "classifier",
@@ -45,6 +48,8 @@ RESULT_COLUMNS = [
     "precision_weighted",
     "recall_weighted",
     "roc_auc",
+    "CV_Accuracy_Mean",
+    "CV_Accuracy_Std",
     "fit_time_s",
     "predict_time_s",
 ]
@@ -53,8 +58,8 @@ RESULT_COLUMNS = [
 def load_dataset(
     csv_path: str | Path | None = None,
     target_column: str | None = None,
-) -> tuple[np.ndarray, np.ndarray, str]:
-    """Wczytaj cechy i etykiety.
+) -> tuple[np.ndarray, np.ndarray, str, list[str]]:
+    """Wczytaj cechy, etykiety i nazwy klas.
 
     csv_path=None wybiera sklearn.datasets.load_iris.
     Dla pliku CSV kolumną celu jest target_column, a gdy jej nie podano — ostatnia kolumna.
@@ -64,7 +69,7 @@ def load_dataset(
         bunch = load_iris()
         features = np.asarray(bunch.data, dtype=float)
         target = np.asarray(bunch.target)
-        return features, target, "iris"
+        return features, target, "iris", [str(name) for name in bunch.target_names]
 
     path = Path(csv_path)
     frame = pd.read_csv(path)
@@ -91,7 +96,9 @@ def load_dataset(
         target = LabelEncoder().fit_transform(target_raw.astype(str))
 
     features = features_frame.to_numpy(dtype=float)
-    return features, np.asarray(target), path.name
+    target = np.asarray(target)
+    class_names = [str(label) for label in np.unique(target)]
+    return features, target, path.name, class_names
 
 
 def split_and_scale(
@@ -182,6 +189,17 @@ def safe_roc_auc(model, features_test: np.ndarray, target_test: np.ndarray) -> f
         return float("nan")
 
 
+def cross_validate_accuracy(
+    model,
+    features: np.ndarray,
+    target: np.ndarray,
+    cv: StratifiedKFold,
+) -> tuple[float, float]:
+    """Średnia i odchylenie accuracy z przekazanych podziałów StratifiedKFold."""
+    scores = cross_val_score(model, features, target, cv=cv, scoring="accuracy")
+    return float(scores.mean()), float(scores.std())
+
+
 def evaluate_classifier(
     model,
     features_train: np.ndarray,
@@ -223,6 +241,7 @@ def compare_classifiers(
     """Oceń każdy klasyfikator z all_estimators; błędy zapisz jako pominięcia."""
     warnings.filterwarnings("ignore")
 
+    cv = StratifiedKFold(n_splits=CV_SPLITS, shuffle=True, random_state=RANDOM_STATE)
     discovered = all_estimators(type_filter="classifier")
     rows: list[dict[str, float | str]] = []
     skipped: list[tuple[str, str]] = []
@@ -232,6 +251,10 @@ def compare_classifiers(
         print(f"[{index}/{total}] {name}", flush=True)
         try:
             model = build_classifier(estimator_cls)
+            try:
+                cv_mean, cv_std = cross_validate_accuracy(model, features_train, target_train, cv)
+            except Exception:
+                cv_mean, cv_std = float("nan"), float("nan")
             metrics = evaluate_classifier(
                 model,
                 features_train,
@@ -239,6 +262,8 @@ def compare_classifiers(
                 target_train,
                 target_test,
             )
+            metrics["CV_Accuracy_Mean"] = cv_mean
+            metrics["CV_Accuracy_Std"] = cv_std
         except Exception as exc:
             reason = f"{type(exc).__name__}: {exc}".replace("\n", " ").strip()
             if len(reason) > 240:
@@ -252,6 +277,7 @@ def compare_classifiers(
         print(
             f"  F1={metrics['f1_score']:.4f}  "
             f"accuracy={metrics['accuracy']:.4f}  "
+            f"CV={metrics['CV_Accuracy_Mean']:.4f}±{metrics['CV_Accuracy_Std']:.4f}  "
             f"fit={metrics['fit_time_s']:.3f}s",
             flush=True,
         )
@@ -350,13 +376,43 @@ def plot_ranking(results: pd.DataFrame, dataset_name: str) -> None:
     plt.close(fig)
 
 
+def plot_confusion_matrix(
+    model_name: str,
+    features_train: np.ndarray,
+    features_test: np.ndarray,
+    target_train: np.ndarray,
+    target_test: np.ndarray,
+    class_names: list[str],
+) -> None:
+    """Macierz pomyłek najlepszego modelu na zbiorze testowym."""
+    estimators = dict(all_estimators(type_filter="classifier"))
+    model = build_classifier(estimators[model_name])
+    model.fit(features_train, target_train)
+
+    fig, ax = plt.subplots(figsize=(7, 6), constrained_layout=True)
+    ConfusionMatrixDisplay.from_estimator(
+        model,
+        features_test,
+        target_test,
+        display_labels=class_names,
+        cmap="Blues",
+        colorbar=False,
+        ax=ax,
+    )
+    ax.set_title(f"Macierz pomyłek — {model_name}")
+    ax.set_xlabel("Predykcja")
+    ax.set_ylabel("Prawdziwa klasa")
+    fig.savefig(CONFUSION_PNG, dpi=150)
+    plt.close(fig)
+
+
 def main() -> None:
     # Podmień wbudowany zbiór, ustawiając ścieżkę do CSV, np. Path("dane.csv").
     # TARGET_COLUMN = None oznacza ostatnią kolumnę pliku.
     csv_path: str | Path | None = None
     target_column: str | None = None
 
-    features, target, dataset_name = load_dataset(csv_path, target_column)
+    features, target, dataset_name, class_names = load_dataset(csv_path, target_column)
     print(
         f"Zbiór: {dataset_name} | próbki: {len(target)} | "
         f"cechy: {features.shape[1]} | klasy: {np.unique(target).size}"
@@ -368,6 +424,10 @@ def main() -> None:
         f"(test_size={TEST_SIZE}, random_state={RANDOM_STATE}, stratify=y)"
     )
     print("Skalowanie: StandardScaler (fit na train, transform na test)")
+    print(
+        f"Walidacja krzyżowa: StratifiedKFold(n_splits={CV_SPLITS}, "
+        f"shuffle=True, random_state={RANDOM_STATE}) na zbiorze treningowym"
+    )
     print()
 
     started = time.perf_counter()
@@ -384,12 +444,24 @@ def main() -> None:
     plot_ranking(results, dataset_name)
 
     best = results.iloc[0]
+    plot_confusion_matrix(
+        str(best["classifier"]),
+        features_train,
+        features_test,
+        target_train,
+        target_test,
+        class_names,
+    )
     print(f"Oceniono: {len(results)} | pominięto: {len(skipped)} | czas: {elapsed:.1f}s")
     print(
         f"Najlepszy: {best['classifier']} "
-        f"(F1={best['f1_score']:.4f}, accuracy={best['accuracy']:.4f})"
+        f"(F1={best['f1_score']:.4f}, accuracy={best['accuracy']:.4f}, "
+        f"CV={best['CV_Accuracy_Mean']:.4f}±{best['CV_Accuracy_Std']:.4f})"
     )
-    print(f"Zapisano: {RESULTS_CSV.name}, {SKIPPED_LOG.name}, {RANKING_PNG.name}")
+    print(
+        f"Zapisano: {RESULTS_CSV.name}, {SKIPPED_LOG.name}, "
+        f"{RANKING_PNG.name}, {CONFUSION_PNG.name}"
+    )
 
 
 if __name__ == "__main__":
