@@ -1,0 +1,13 @@
+CategoricalNB: ValueError: Negative values in data passed to CategoricalNB (input X).
+ClassifierChain: TypeError: wymaga dodatkowych argumentów inicjalizacyjnych: estimator
+ComplementNB: ValueError: Negative values in data passed to ComplementNB (input X).
+FixedThresholdClassifier: TypeError: wymaga dodatkowych argumentów inicjalizacyjnych: estimator
+MultiOutputClassifier: TypeError: wymaga dodatkowych argumentów inicjalizacyjnych: estimator
+MultinomialNB: ValueError: Negative values in data passed to MultinomialNB (input X).
+OneVsOneClassifier: TypeError: wymaga dodatkowych argumentów inicjalizacyjnych: estimator
+OneVsRestClassifier: TypeError: wymaga dodatkowych argumentów inicjalizacyjnych: estimator
+OutputCodeClassifier: TypeError: wymaga dodatkowych argumentów inicjalizacyjnych: estimator
+SelfTrainingClassifier: InvalidParameterError: The 'estimator' parameter of SelfTrainingClassifier must be an object implementing 'fit'. Got None instead.
+StackingClassifier: TypeError: wymaga dodatkowych argumentów inicjalizacyjnych: estimators
+TunedThresholdClassifierCV: TypeError: wymaga dodatkowych argumentów inicjalizacyjnych: estimator
+VotingClassifier: TypeError: wymaga dodatkowych argumentów inicjalizacyjnych: estimators
