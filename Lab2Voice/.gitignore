@@ -1,0 +1,7 @@
+.venv/
+.idea/
+pycharm_speech_lab/__pycache__/
+pycharm_speech_lab/data/
+pycharm_speech_lab/plots/
+pycharm_speech_lab/results/
+pycharm_speech_lab/speech_model.pt

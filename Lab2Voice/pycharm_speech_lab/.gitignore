@@ -1,0 +1,8 @@
+.venv/
+.idea/
+__pycache__/
+*.pyc
+data/
+speech_model.pt
+plots/
+results/
